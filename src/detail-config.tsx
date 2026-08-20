@@ -1,4 +1,4 @@
-// 场景：详情「配置」路径字段 — 跟宿主暗/亮主题；右栏紧凑，避免浅色硬编码发灰。
+// 场景：详情「配置」路径字段 — 保留原布局文案；颜色跟宿主主题，禁止浅色硬编码。
 import { createElement, useCallback, useEffect, useState, type ReactElement } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -119,7 +119,7 @@ function PathDetailField({
     await persist(value.trim());
   }, [persist, value]);
 
-  const btnChrome = {
+  const chrome = {
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.input || "rgba(0,0,0,0.18)",
   } as const;
@@ -128,8 +128,10 @@ function PathDetailField({
     <View style={styles.wrap} testID={`boujoy-path-field-${field}`}>
       {directory ? (
         <Text
-          style={[styles.pathText, { color: value ? theme.colors.foreground : theme.colors.foregroundMuted }]}
-          numberOfLines={2}
+          style={[
+            styles.pathText,
+            { color: value ? theme.colors.foreground : theme.colors.foregroundMuted },
+          ]}
           selectable
         >
           {value || emptyHint}
@@ -161,19 +163,19 @@ function PathDetailField({
               accessibilityRole="button"
               disabled={busy}
               onPress={() => void onPickDirectory()}
-              style={[styles.btn, btnChrome, busy ? styles.btnDisabled : null]}
+              style={[styles.btn, chrome, busy ? styles.btnDisabled : null]}
             >
               <Text style={[styles.btnText, { color: theme.colors.foreground }]}>
-                {busy ? "…" : "选择"}
+                {busy ? "处理中…" : "选择目录"}
               </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
               disabled={busy}
               onPress={() => void onClear()}
-              style={[styles.btn, btnChrome, busy ? styles.btnDisabled : null]}
+              style={[styles.btn, chrome, busy ? styles.btnDisabled : null]}
             >
-              <Text style={[styles.btnText, { color: theme.colors.foregroundMuted }]}>默认</Text>
+              <Text style={[styles.btnText, { color: theme.colors.foreground }]}>恢复默认</Text>
             </Pressable>
           </>
         ) : (
@@ -181,10 +183,10 @@ function PathDetailField({
             accessibilityRole="button"
             disabled={busy}
             onPress={() => void onCommitTyped()}
-            style={[styles.btn, btnChrome, busy ? styles.btnDisabled : null]}
+            style={[styles.btn, chrome, busy ? styles.btnDisabled : null]}
           >
             <Text style={[styles.btnText, { color: theme.colors.foreground }]}>
-              {busy ? "…" : "保存"}
+              {busy ? "处理中…" : "保存路径"}
             </Text>
           </Pressable>
         )}
@@ -221,7 +223,7 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
           groupTitle: "Boujoy 路径",
           valueContent: createElement(PathDetailField, {
             field: "vault",
-            emptyHint: "默认 demo-vault",
+            emptyHint: "（默认：App 内 demo-vault）",
             pickTitle: "选择 Boujoy Vault 目录",
             directory: true,
           }),
@@ -231,12 +233,12 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
           value: paths.dshRoot || "未配置",
           copyText: paths.dshRoot || undefined,
           helpText:
-            "本机 DeepSeek Harness 根目录（需含 node_modules/.bin/dsh）。Boujoy 官方不附带 runtime：macOS 需自行装好再填路径；Windows 可用 Prepare-Windows-Runtime.ps1 安装 @deepseek-ai/dsh。未配置仍可开 UI，但 Agent 不可用。",
+            "本机 DeepSeek Harness 根目录（需含 node_modules/.bin/dsh）。Boujoy 官方不附带 runtime；未配置仍可开 UI，但 Agent 不可用。",
           groupId: "boujoy-paths",
           groupTitle: "Boujoy 路径",
           valueContent: createElement(PathDetailField, {
             field: "dshRoot",
-            emptyHint: "未配置",
+            emptyHint: "（未配置则不拉起 dsh）",
             pickTitle: "选择 DeepSeek Harness 根目录",
             directory: true,
           }),
@@ -263,51 +265,44 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
 const styles = StyleSheet.create(
   {
     wrap: {
-      alignItems: "flex-end",
-      maxWidth: 220,
-      gap: 6,
+      width: "100%",
       minWidth: 0,
+      gap: 8,
     },
     pathText: {
       fontSize: 12,
       lineHeight: 16,
-      textAlign: "right",
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      width: "100%",
     },
     input: {
       width: "100%",
       fontSize: 12,
       lineHeight: 16,
       borderWidth: 1,
-      borderRadius: 8,
-      paddingHorizontal: 10,
-      paddingVertical: 7,
+      borderRadius: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     },
     btnRow: {
       flexDirection: "row",
       flexWrap: "wrap",
-      justifyContent: "flex-end",
-      gap: 6,
+      gap: 8,
     },
     btn: {
       borderWidth: 1,
-      borderRadius: 8,
+      borderRadius: 6,
       paddingHorizontal: 10,
-      paddingVertical: 6,
+      paddingVertical: 4,
     },
     btnDisabled: {
       opacity: 0.55,
     },
     btnText: {
       fontSize: 12,
-      fontWeight: "600",
     },
     errorText: {
-      fontSize: 11,
-      textAlign: "right",
-      width: "100%",
+      fontSize: 12,
     },
   },
   "boujoy-detail-config",
