@@ -1,7 +1,14 @@
-// 场景：详情「配置」路径 UI — 短标签 + 内容宽横排芯片 + Python 输入/保存同行（禁止右栏 stretch 满宽灰砖）。
+// 场景：详情「配置」路径 UI — 可读短标签；内联 flex 横排芯片；Python 真输入框与保存同行。
 import { createElement, useCallback, useEffect, useState, type ReactElement } from "react";
-import { Pressable, Text, TextInput, View, type ViewStyle } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import {
+  Pressable,
+  Text,
+  TextInput,
+  View,
+  type TextStyle,
+  type ViewStyle,
+} from "react-native";
+import { useUnistyles } from "react-native-unistyles";
 import type { WorkspaceAppHostApi } from "@getagnx/app-sdk";
 import { BOUJOY_APP_ID } from "./constants";
 import {
@@ -30,10 +37,10 @@ function setCachedBoujoyPaths(next: BoujoyPathsConfigDocument): void {
 
 type PathFieldKey = "vault" | "dshRoot" | "python";
 
-/** 内容宽芯片：禁止 flex 拉满右栏。 */
-function chipChrome(colorScheme: string, pressed: boolean): ViewStyle {
+function chipStyle(colorScheme: string, pressed: boolean, busy: boolean): ViewStyle {
   const dark = colorScheme !== "light";
   return {
+    // 强制内容宽，禁止被右栏 stretch 成满宽灰砖
     alignSelf: "flex-start",
     flexGrow: 0,
     flexShrink: 0,
@@ -41,7 +48,7 @@ function chipChrome(colorScheme: string, pressed: boolean): ViewStyle {
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    minHeight: 28,
+    minHeight: 30,
     justifyContent: "center",
     alignItems: "center",
     borderColor: dark ? "rgba(255,255,255,0.48)" : "rgba(0,0,0,0.28)",
@@ -52,6 +59,7 @@ function chipChrome(colorScheme: string, pressed: boolean): ViewStyle {
       : dark
         ? "rgba(255,255,255,0.16)"
         : "rgba(0,0,0,0.06)",
+    opacity: busy ? 0.5 : 1,
   };
 }
 
@@ -69,7 +77,9 @@ function PathDetailField({
   const { theme } = useUnistyles();
   const [value, setValue] = useState(cachedPaths[field] || "");
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dark = theme.colorScheme !== "light";
 
   useEffect(() => {
     let cancelled = false;
@@ -144,32 +154,93 @@ function PathDetailField({
     await persist(value.trim());
   }, [persist, value]);
 
-  const inputBg =
-    theme.colorScheme === "light" ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.08)";
-  const inputBorder =
-    theme.colorScheme === "light" ? "rgba(0,0,0,0.22)" : "rgba(255,255,255,0.35)";
-  const primaryBg = theme.colors.accent;
-  const primaryFg = theme.colors.accentForeground || theme.colors.background;
+  const pathTextStyle: TextStyle = {
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    color: value ? theme.colors.foreground : theme.colors.foregroundMuted,
+  };
+
+  const btnTextStyle: TextStyle = {
+    fontSize: 12,
+    fontWeight: "500",
+    color: theme.colors.foreground,
+  };
+
+  const errorStyle: TextStyle = {
+    fontSize: 12,
+    color: theme.colors.statusWarning || theme.colors.statusDanger,
+  };
 
   if (!directory) {
+    const inputStyle: TextStyle = {
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minWidth: 0,
+      fontSize: 12,
+      lineHeight: 16,
+      borderWidth: 1.5,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      minHeight: 32,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      color: theme.colors.foreground,
+      borderColor: focused
+        ? theme.colors.accent
+        : dark
+          ? "rgba(255,255,255,0.4)"
+          : "rgba(0,0,0,0.28)",
+      backgroundColor: dark ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.92)",
+    };
+    const pythonRowStyle: ViewStyle = {
+      display: "flex",
+      flexDirection: "row",
+      flexWrap: "nowrap",
+      alignItems: "center",
+      alignSelf: "stretch",
+      width: "100%",
+      gap: 6,
+      minWidth: 0,
+    };
+    const saveStyle = (pressed: boolean): ViewStyle => ({
+      alignSelf: "center",
+      flexGrow: 0,
+      flexShrink: 0,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      minHeight: 32,
+      justifyContent: "center",
+      alignItems: "center",
+      backgroundColor: theme.colors.accent,
+      opacity: busy ? 0.5 : pressed ? 0.88 : 1,
+    });
+    const saveTextStyle: TextStyle = {
+      fontSize: 12,
+      fontWeight: "600",
+      color: theme.colors.accentForeground || theme.colors.background,
+    };
+
     return (
-      <View style={styles.wrap} testID={`boujoy-path-field-${field}`}>
-        <View style={styles.pythonRow}>
+      <View
+        style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6, width: "100%" }}
+        testID={`boujoy-path-field-${field}`}
+      >
+        <View style={pythonRowStyle}>
           <TextInput
-            style={[
-              styles.inputInline,
-              {
-                color: theme.colors.foreground,
-                borderColor: inputBorder,
-                backgroundColor: inputBg,
-              },
-            ]}
+            style={inputStyle}
             value={value}
             placeholder={emptyHint}
             placeholderTextColor={theme.colors.foregroundMuted}
             editable={!busy}
             onChangeText={setValue}
-            onBlur={() => void onCommitTyped()}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              setFocused(false);
+              void onCommitTyped();
+            }}
             autoCapitalize="none"
             autoCorrect={false}
           />
@@ -177,68 +248,59 @@ function PathDetailField({
             accessibilityRole="button"
             disabled={busy}
             onPress={() => void onCommitTyped()}
-            style={({ pressed }) => [
-              styles.saveChip,
-              {
-                backgroundColor: primaryBg,
-                opacity: busy ? 0.5 : pressed ? 0.88 : 1,
-              },
-            ]}
+            style={({ pressed }) => saveStyle(pressed)}
           >
-            <Text style={[styles.btnText, { color: primaryFg, fontWeight: "600" }]}>
-              {busy ? "…" : "保存"}
-            </Text>
+            <Text style={saveTextStyle}>{busy ? "…" : "保存"}</Text>
           </Pressable>
         </View>
-        {error ? (
-          <Text
-            style={{ color: theme.colors.statusWarning || theme.colors.statusDanger, fontSize: 12 }}
-          >
-            {error}
-          </Text>
-        ) : null}
+        {error ? <Text style={errorStyle}>{error}</Text> : null}
       </View>
     );
   }
 
+  const chipRowStyle: ViewStyle = {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "nowrap",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+  };
+
   return (
-    <View style={styles.wrap} testID={`boujoy-path-field-${field}`}>
-      <Text
-        style={[
-          styles.pathText,
-          { color: value ? theme.colors.foreground : theme.colors.foregroundMuted },
-        ]}
-        selectable
-      >
+    <View
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
+        alignSelf: "flex-start",
+        maxWidth: "100%",
+        gap: 6,
+      }}
+      testID={`boujoy-path-field-${field}`}
+    >
+      <Text style={pathTextStyle} selectable>
         {value || emptyHint}
       </Text>
-      <View style={styles.chipRow}>
+      <View style={chipRowStyle}>
         <Pressable
           accessibilityRole="button"
           disabled={busy}
           onPress={() => void onPickDirectory()}
-          style={({ pressed }) => [chipChrome(theme.colorScheme, pressed), { opacity: busy ? 0.5 : 1 }]}
+          style={({ pressed }) => chipStyle(theme.colorScheme, pressed, busy)}
         >
-          <Text style={[styles.btnText, { color: theme.colors.foreground, fontWeight: "500" }]}>
-            {busy ? "…" : "选择目录"}
-          </Text>
+          <Text style={btnTextStyle}>{busy ? "…" : "选择目录"}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
           disabled={busy}
           onPress={() => void onClear()}
-          style={({ pressed }) => [chipChrome(theme.colorScheme, pressed), { opacity: busy ? 0.5 : 1 }]}
+          style={({ pressed }) => chipStyle(theme.colorScheme, pressed, busy)}
         >
-          <Text style={[styles.btnText, { color: theme.colors.foreground, fontWeight: "500" }]}>
-            恢复
-          </Text>
+          <Text style={btnTextStyle}>恢复</Text>
         </Pressable>
       </View>
-      {error ? (
-        <Text style={{ color: theme.colors.statusWarning || theme.colors.statusDanger, fontSize: 12 }}>
-          {error}
-        </Text>
-      ) : null}
+      {error ? <Text style={errorStyle}>{error}</Text> : null}
     </View>
   );
 }
@@ -257,7 +319,7 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
       const paths = getCachedBoujoyPaths();
       return [
         {
-          label: "Vault",
+          label: "Vault 目录",
           value: paths.vault || "默认 demo-vault",
           copyText: paths.vault || undefined,
           helpText:
@@ -272,7 +334,7 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
           }),
         },
         {
-          label: "DSH",
+          label: "DSH 根目录",
           value: paths.dshRoot || "未配置",
           copyText: paths.dshRoot || undefined,
           helpText:
@@ -287,7 +349,7 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
           }),
         },
         {
-          label: "Python",
+          label: "Python 路径",
           value: paths.python || "/usr/bin/python3",
           copyText: paths.python || undefined,
           helpText: "运行 boujoy_server.py 的 Python 3。留空则用 /usr/bin/python3。",
@@ -304,61 +366,3 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
     },
   });
 }
-
-const styles = StyleSheet.create(
-  {
-    wrap: {
-      width: "100%",
-      minWidth: 0,
-      alignItems: "flex-start",
-      gap: 6,
-    },
-    pathText: {
-      fontSize: 12,
-      lineHeight: 16,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    },
-    chipRow: {
-      flexDirection: "row",
-      flexWrap: "nowrap",
-      alignItems: "center",
-      alignSelf: "flex-start",
-      gap: 6,
-    },
-    pythonRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      alignSelf: "stretch",
-      width: "100%",
-      gap: 6,
-      minWidth: 0,
-    },
-    inputInline: {
-      flex: 1,
-      minWidth: 0,
-      fontSize: 12,
-      lineHeight: 16,
-      borderWidth: 1.5,
-      borderRadius: 8,
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      minHeight: 28,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    },
-    saveChip: {
-      alignSelf: "center",
-      flexGrow: 0,
-      flexShrink: 0,
-      borderRadius: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      minHeight: 28,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    btnText: {
-      fontSize: 12,
-    },
-  },
-  "boujoy-detail-config",
-);
