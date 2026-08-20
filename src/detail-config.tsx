@@ -305,6 +305,29 @@ function PathDetailField({
   );
 }
 
+function SelectPreviewField(): ReactElement {
+  const host = getBoundHost();
+  const Select = host?.ui?.Select;
+  const [value, setValue] = useState("field-default");
+
+  if (!Select) {
+    return createElement(Text, { style: { fontSize: 12 } }, "（需重启 Electron 以加载 host.ui.Select）");
+  }
+
+  return createElement(Select, {
+    value,
+    onSelect: setValue,
+    placeholder: "选择预览档",
+    options: [
+      { id: "field-default", label: "field · 默认密度" },
+      { id: "field-compact", label: "field · 紧凑文案" },
+      { id: "field-wide", label: "field · 宽列表项演示" },
+    ],
+    testID: "boujoy-select-preview",
+    accessibilityLabel: "下拉样式预览",
+  });
+}
+
 export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => void {
   if (!host.ui?.registerDetailSheetExtras) {
     return () => {};
@@ -361,6 +384,14 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
             pickTitle: "选择 python3 可执行文件",
             directory: false,
           }),
+        },
+        {
+          label: "下拉预览",
+          value: "host.ui.Select · field",
+          helpText: "公共 Select 控件样式预览；不影响 Boujoy 运行。满意后再统一其它 App。",
+          groupId: "boujoy-ui-preview",
+          groupTitle: "控件预览",
+          valueContent: createElement(SelectPreviewField),
         },
       ];
     },
