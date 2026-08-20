@@ -1,7 +1,6 @@
 // 场景：详情「配置」路径 UI — 可读短标签；内联 flex 横排芯片；Python 真输入框与保存同行。
 import { createElement, useCallback, useEffect, useState, type ReactElement } from "react";
 import {
-  Pressable,
   Text,
   TextInput,
   View,
@@ -172,24 +171,7 @@ function PathDetailField({
       gap: 6,
       minWidth: 0,
     };
-    const saveStyle = (pressed: boolean): ViewStyle => ({
-      alignSelf: "center",
-      flexGrow: 0,
-      flexShrink: 0,
-      borderRadius: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 7,
-      minHeight: 32,
-      justifyContent: "center",
-      alignItems: "center",
-      backgroundColor: theme.colors.accent,
-      opacity: busy ? 0.5 : pressed ? 0.88 : 1,
-    });
-    const saveTextStyle: TextStyle = {
-      fontSize: 12,
-      fontWeight: "600",
-      color: theme.colors.accentForeground || theme.colors.background,
-    };
+    const Chip = getBoundHost()?.ui?.Chip;
 
     return (
       <View
@@ -212,14 +194,21 @@ function PathDetailField({
             autoCapitalize="none"
             autoCorrect={false}
           />
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy}
-            onPress={() => void onCommitTyped()}
-            style={({ pressed }) => saveStyle(pressed)}
-          >
-            <Text style={saveTextStyle}>{busy ? "…" : "保存"}</Text>
-          </Pressable>
+          {Chip ? (
+            createElement(Chip, {
+              label: busy ? "…" : "保存",
+              tone: "accent",
+              busy,
+              disabled: busy,
+              onPress: () => void onCommitTyped(),
+              testID: `boujoy-path-save-${field}`,
+              accessibilityLabel: "保存",
+            })
+          ) : (
+            <Text style={{ fontSize: 12, color: theme.colors.foregroundMuted }}>
+              （需重启 Electron 以加载 host.ui.Chip）
+            </Text>
+          )}
         </View>
         {error ? <Text style={errorStyle}>{error}</Text> : null}
       </View>
