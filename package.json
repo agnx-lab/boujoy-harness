@@ -1,6 +1,6 @@
 {
   "name": "@agnx-sub/com.agnx.boujoy-harness",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "private": true,
   "description": "Agnx 外置子应用：整仓嵌入 boujoy-harness（真实树）；Tab 内嵌原 UI + 自带 DeepSeek Harness",
   "main": "dist/index.js",
