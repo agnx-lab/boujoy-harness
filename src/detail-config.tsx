@@ -37,40 +37,28 @@ function setCachedBoujoyPaths(next: BoujoyPathsConfigDocument): void {
 
 type PathFieldKey = "vault" | "dshRoot" | "python";
 
-function chipStyle(
-  colorScheme: string,
-  pressed: boolean,
-  hovered: boolean,
-  busy: boolean,
-): ViewStyle {
+function chipStyle(colorScheme: string, pressed: boolean, busy: boolean): ViewStyle {
   const dark = colorScheme !== "light";
-  const showFrame = hovered || pressed;
   return {
     // 强制内容宽，禁止被右栏 stretch 成满宽灰砖
     alignSelf: "flex-start",
     flexGrow: 0,
     flexShrink: 0,
-    borderWidth: showFrame ? 1.5 : 0,
+    borderWidth: 1.5,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
     minHeight: 30,
     justifyContent: "center",
     alignItems: "center",
-    borderColor: showFrame
+    borderColor: dark ? "rgba(255,255,255,0.48)" : "rgba(0,0,0,0.28)",
+    backgroundColor: pressed
       ? dark
-        ? "rgba(255,255,255,0.48)"
-        : "rgba(0,0,0,0.28)"
-      : "transparent",
-    backgroundColor: showFrame
-      ? pressed
-        ? dark
-          ? "rgba(255,255,255,0.26)"
-          : "rgba(0,0,0,0.12)"
-        : dark
-          ? "rgba(255,255,255,0.16)"
-          : "rgba(0,0,0,0.06)"
-      : "transparent",
+        ? "rgba(255,255,255,0.26)"
+        : "rgba(0,0,0,0.12)"
+      : dark
+        ? "rgba(255,255,255,0.16)"
+        : "rgba(0,0,0,0.06)",
     opacity: busy ? 0.5 : 1,
   };
 }
@@ -296,9 +284,7 @@ function PathDetailField({
           accessibilityRole="button"
           disabled={busy}
           onPress={() => void onPickDirectory()}
-          style={({ pressed, hovered }) =>
-            chipStyle(theme.colorScheme, pressed, hovered ?? false, busy)
-          }
+          style={({ pressed }) => chipStyle(theme.colorScheme, pressed, busy)}
         >
           <Text style={btnTextStyle}>{busy ? "…" : "选择目录"}</Text>
         </Pressable>
@@ -306,9 +292,7 @@ function PathDetailField({
           accessibilityRole="button"
           disabled={busy}
           onPress={() => void onClear()}
-          style={({ pressed, hovered }) =>
-            chipStyle(theme.colorScheme, pressed, hovered ?? false, busy)
-          }
+          style={({ pressed }) => chipStyle(theme.colorScheme, pressed, busy)}
         >
           <Text style={btnTextStyle}>恢复</Text>
         </Pressable>
