@@ -1,6 +1,6 @@
-// 场景：详情「配置」路径字段 — RN Pressable 实心底按钮（跟宿主主题）；避免 HTML button 被 RNW 重置成纯文字链。
+// 场景：详情「配置」路径字段 — 次级钮必须有可见描边+抬层底（暗色卡上不能用 popover/input 糊成纯文字链）。
 import { createElement, useCallback, useEffect, useState, type ReactElement } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View, type ViewStyle } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import type { WorkspaceAppHostApi } from "@getagnx/app-sdk";
 import { BOUJOY_APP_ID } from "./constants";
@@ -29,6 +29,28 @@ function setCachedBoujoyPaths(next: BoujoyPathsConfigDocument): void {
 }
 
 type PathFieldKey = "vault" | "dshRoot" | "python";
+
+/** 详情 surface2 卡上的次级按钮：用半透明白/黑抬层 + 明显描边，不依赖 popover/input（易与卡同色）。 */
+function secondaryButtonChrome(colorScheme: string, pressed: boolean): ViewStyle {
+  const dark = colorScheme !== "light";
+  return {
+    borderWidth: 1.5,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    minHeight: 32,
+    justifyContent: "center",
+    alignItems: "center",
+    borderColor: dark ? "rgba(255,255,255,0.42)" : "rgba(0,0,0,0.28)",
+    backgroundColor: pressed
+      ? dark
+        ? "rgba(255,255,255,0.22)"
+        : "rgba(0,0,0,0.12)"
+      : dark
+        ? "rgba(255,255,255,0.14)"
+        : "rgba(0,0,0,0.06)",
+  };
+}
 
 function PathDetailField({
   field,
@@ -119,9 +141,8 @@ function PathDetailField({
     await persist(value.trim());
   }, [persist, value]);
 
-  /** 详情分组卡是 surface2；按钮须抬层，禁止 input/surface2 同色糊底。 */
-  const secondaryBg = theme.colors.popover || theme.colors.surface0;
-  const secondaryBorder = theme.colors.border;
+  const inputBg =
+    theme.colorScheme === "light" ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.08)";
   const primaryBg = theme.colors.accent;
   const primaryFg = theme.colors.accentForeground || theme.colors.background;
 
@@ -143,8 +164,9 @@ function PathDetailField({
             styles.input,
             {
               color: theme.colors.foreground,
-              borderColor: theme.colors.border,
-              backgroundColor: secondaryBg,
+              borderColor:
+                theme.colorScheme === "light" ? "rgba(0,0,0,0.22)" : "rgba(255,255,255,0.35)",
+              backgroundColor: inputBg,
             },
           ]}
           value={value}
@@ -165,15 +187,11 @@ function PathDetailField({
               disabled={busy}
               onPress={() => void onPickDirectory()}
               style={({ pressed }) => [
-                styles.btn,
-                {
-                  borderColor: secondaryBorder,
-                  backgroundColor: pressed ? theme.colors.surface1 || secondaryBg : secondaryBg,
-                  opacity: busy ? 0.5 : 1,
-                },
+                secondaryButtonChrome(theme.colorScheme, pressed),
+                { opacity: busy ? 0.5 : 1 },
               ]}
             >
-              <Text style={[styles.btnText, { color: theme.colors.foreground }]}>
+              <Text style={[styles.btnText, { color: theme.colors.foreground, fontWeight: "500" }]}>
                 {busy ? "处理中…" : "选择目录"}
               </Text>
             </Pressable>
@@ -182,15 +200,13 @@ function PathDetailField({
               disabled={busy}
               onPress={() => void onClear()}
               style={({ pressed }) => [
-                styles.btn,
-                {
-                  borderColor: secondaryBorder,
-                  backgroundColor: pressed ? theme.colors.surface1 || secondaryBg : secondaryBg,
-                  opacity: busy ? 0.5 : 1,
-                },
+                secondaryButtonChrome(theme.colorScheme, pressed),
+                { opacity: busy ? 0.5 : 1 },
               ]}
             >
-              <Text style={[styles.btnText, { color: theme.colors.foreground }]}>恢复默认</Text>
+              <Text style={[styles.btnText, { color: theme.colors.foreground, fontWeight: "500" }]}>
+                恢复默认
+              </Text>
             </Pressable>
           </>
         ) : (
@@ -299,7 +315,7 @@ const styles = StyleSheet.create(
       width: "100%",
       fontSize: 12,
       lineHeight: 16,
-      borderWidth: 1,
+      borderWidth: 1.5,
       borderRadius: 8,
       paddingHorizontal: 10,
       paddingVertical: 7,
@@ -310,17 +326,6 @@ const styles = StyleSheet.create(
       flexWrap: "wrap",
       gap: 8,
     },
-    /** 次级按钮：popover/surface0 抬层 + 描边，与 surface2 分组卡拉开对比。 */
-    btn: {
-      borderWidth: 1,
-      borderRadius: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 7,
-      minHeight: 32,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    /** 主操作：accent 实心。 */
     btnPrimary: {
       borderRadius: 8,
       paddingHorizontal: 14,
