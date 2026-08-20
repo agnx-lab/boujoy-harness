@@ -1,6 +1,7 @@
-// 场景：详情「配置」路径字段 — 恢复原先 DOM 按钮布局；颜色从 useUnistyles 主题取，禁止浅色硬编码。
-import { createElement, useCallback, useEffect, useState, type CSSProperties, type ReactElement } from "react";
-import { useUnistyles } from "react-native-unistyles";
+// 场景：详情「配置」路径字段 — RN Pressable 实心底按钮（跟宿主主题）；避免 HTML button 被 RNW 重置成纯文字链。
+import { createElement, useCallback, useEffect, useState, type ReactElement } from "react";
+import { Pressable, Text, TextInput, View } from "react-native";
+import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import type { WorkspaceAppHostApi } from "@getagnx/app-sdk";
 import { BOUJOY_APP_ID } from "./constants";
 import {
@@ -26,20 +27,6 @@ export function getCachedBoujoyPaths(): BoujoyPathsConfigDocument {
 function setCachedBoujoyPaths(next: BoujoyPathsConfigDocument): void {
   cachedPaths = next;
 }
-
-const rowStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  minWidth: 0,
-  width: "100%",
-};
-
-const btnRowStyle: CSSProperties = {
-  display: "flex",
-  gap: 8,
-  flexWrap: "wrap",
-};
 
 type PathFieldKey = "vault" | "dshRoot" | "python";
 
@@ -132,74 +119,104 @@ function PathDetailField({
     await persist(value.trim());
   }, [persist, value]);
 
-  const pathStyle: CSSProperties = {
-    fontSize: 12,
-    lineHeight: "16px",
-    color: value ? theme.colors.foreground : theme.colors.foregroundMuted,
-    wordBreak: "break-all",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  };
-
-  const btnStyle: CSSProperties = {
-    border: `1px solid ${theme.colors.border}`,
-    background: theme.colors.input || "rgba(255,255,255,0.06)",
-    borderRadius: 6,
-    padding: "4px 10px",
-    fontSize: 12,
-    color: theme.colors.foreground,
-    cursor: busy ? "default" : "pointer",
-    opacity: busy ? 0.55 : 1,
-  };
-
-  const inputStyle: CSSProperties = {
-    fontSize: 12,
-    lineHeight: "16px",
-    color: theme.colors.foreground,
-    wordBreak: "break-all",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    border: `1px solid ${theme.colors.border}`,
-    borderRadius: 6,
-    padding: "6px 8px",
-    background: theme.colors.input || "rgba(255,255,255,0.06)",
-    outline: "none",
-    width: "100%",
-    boxSizing: "border-box",
-  };
-
   return (
-    <div style={rowStyle} data-testid={`boujoy-path-field-${field}`}>
+    <View style={styles.wrap} testID={`boujoy-path-field-${field}`}>
       {directory ? (
-        <div style={pathStyle}>{value || emptyHint}</div>
+        <Text
+          style={[
+            styles.pathText,
+            { color: value ? theme.colors.foreground : theme.colors.foregroundMuted },
+          ]}
+          selectable
+        >
+          {value || emptyHint}
+        </Text>
       ) : (
-        <input
-          style={inputStyle}
+        <TextInput
+          style={[
+            styles.input,
+            {
+              color: theme.colors.foreground,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.input,
+            },
+          ]}
           value={value}
           placeholder={emptyHint}
-          disabled={busy}
-          onChange={(event) => setValue(event.target.value)}
+          placeholderTextColor={theme.colors.foregroundMuted}
+          editable={!busy}
+          onChangeText={setValue}
           onBlur={() => void onCommitTyped()}
+          autoCapitalize="none"
+          autoCorrect={false}
         />
       )}
-      <div style={btnRowStyle}>
+      <View style={styles.btnRow}>
         {directory ? (
           <>
-            <button type="button" style={btnStyle} disabled={busy} onClick={() => void onPickDirectory()}>
-              {busy ? "处理中…" : "选择目录"}
-            </button>
-            <button type="button" style={btnStyle} disabled={busy} onClick={() => void onClear()}>
-              恢复默认
-            </button>
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() => void onPickDirectory()}
+              style={({ pressed }) => [
+                styles.btn,
+                {
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.input,
+                  opacity: busy ? 0.5 : pressed ? 0.85 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.btnText, { color: theme.colors.foreground }]}>
+                {busy ? "处理中…" : "选择目录"}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() => void onClear()}
+              style={({ pressed }) => [
+                styles.btn,
+                {
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.surface1 || theme.colors.input,
+                  opacity: busy ? 0.5 : pressed ? 0.85 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.btnText, { color: theme.colors.foreground }]}>恢复默认</Text>
+            </Pressable>
           </>
         ) : (
-          <button type="button" style={btnStyle} disabled={busy} onClick={() => void onCommitTyped()}>
-            {busy ? "处理中…" : "保存路径"}
-          </button>
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            onPress={() => void onCommitTyped()}
+            style={({ pressed }) => [
+              styles.btnPrimary,
+              {
+                backgroundColor: theme.colors.accent,
+                opacity: busy ? 0.5 : pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.btnText,
+                { color: theme.colors.accentForeground || theme.colors.background, fontWeight: "600" },
+              ]}
+            >
+              {busy ? "处理中…" : "保存路径"}
+            </Text>
+          </Pressable>
         )}
-      </div>
+      </View>
       {error ? (
-        <div style={{ color: theme.colors.statusWarning || "#f59e0b", fontSize: 12 }}>{error}</div>
+        <Text style={{ color: theme.colors.statusWarning || theme.colors.statusDanger, fontSize: 12 }}>
+          {error}
+        </Text>
       ) : null}
-    </div>
+    </View>
   );
 }
 
@@ -264,3 +281,56 @@ export function registerBoujoyDetailConfig(host: WorkspaceAppHostApi): () => voi
     },
   });
 }
+
+const styles = StyleSheet.create(
+  {
+    wrap: {
+      width: "100%",
+      minWidth: 0,
+      gap: 8,
+    },
+    pathText: {
+      fontSize: 12,
+      lineHeight: 16,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    },
+    input: {
+      width: "100%",
+      fontSize: 12,
+      lineHeight: 16,
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    },
+    btnRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    /** 次级操作：实心 input 底 + 描边，暗色下也能看出是控件。 */
+    btn: {
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      minHeight: 30,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    /** 主操作：accent 实心，对标 relay 详情保存钮。 */
+    btnPrimary: {
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      minHeight: 30,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    btnText: {
+      fontSize: 12,
+    },
+  },
+  "boujoy-detail-config",
+);
