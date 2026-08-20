@@ -37,8 +37,15 @@ function setCachedBoujoyPaths(next: BoujoyPathsConfigDocument): void {
 
 type PathFieldKey = "vault" | "dshRoot" | "python";
 
-function chipStyle(colorScheme: string, pressed: boolean, busy: boolean): ViewStyle {
+function chipStyle(
+  colorScheme: string,
+  pressed: boolean,
+  hovered: boolean,
+  busy: boolean,
+): ViewStyle {
   const dark = colorScheme !== "light";
+  const visibleBorder = dark ? "rgba(255,255,255,0.48)" : "rgba(0,0,0,0.28)";
+  const showBorder = hovered || pressed;
   return {
     // 强制内容宽，禁止被右栏 stretch 成满宽灰砖
     alignSelf: "flex-start",
@@ -51,7 +58,7 @@ function chipStyle(colorScheme: string, pressed: boolean, busy: boolean): ViewSt
     minHeight: 30,
     justifyContent: "center",
     alignItems: "center",
-    borderColor: dark ? "rgba(255,255,255,0.48)" : "rgba(0,0,0,0.28)",
+    borderColor: showBorder ? visibleBorder : "transparent",
     backgroundColor: pressed
       ? dark
         ? "rgba(255,255,255,0.26)"
@@ -287,7 +294,9 @@ function PathDetailField({
           accessibilityRole="button"
           disabled={busy}
           onPress={() => void onPickDirectory()}
-          style={({ pressed }) => chipStyle(theme.colorScheme, pressed, busy)}
+          style={({ pressed, hovered }) =>
+            chipStyle(theme.colorScheme, pressed, hovered ?? false, busy)
+          }
         >
           <Text style={btnTextStyle}>{busy ? "…" : "选择目录"}</Text>
         </Pressable>
@@ -295,7 +304,9 @@ function PathDetailField({
           accessibilityRole="button"
           disabled={busy}
           onPress={() => void onClear()}
-          style={({ pressed }) => chipStyle(theme.colorScheme, pressed, busy)}
+          style={({ pressed, hovered }) =>
+            chipStyle(theme.colorScheme, pressed, hovered ?? false, busy)
+          }
         >
           <Text style={btnTextStyle}>恢复</Text>
         </Pressable>
