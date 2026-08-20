@@ -1,0 +1,19 @@
+{
+  "name": "@agnx-sub/com.agnx.boujoy-harness",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Agnx 外置子应用：整仓嵌入 boujoy-harness（真实树）；Tab 内嵌原 UI + 自带 DeepSeek Harness",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "dev": "node ./scripts/dev-watch.mjs"
+  },
+  "peerDependencies": {
+    "@getagnx/app-sdk": "*",
+    "lucide-react-native": "*",
+    "react": "*",
+    "react-native": "*",
+    "react-native-unistyles": "*"
+  }
+}

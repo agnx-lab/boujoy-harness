@@ -1,0 +1,23 @@
+{
+  "id": "com.agnx.boujoy-harness",
+  "name": "Boujoy 工作台",
+  "version": "0.2.0",
+  "engines": {
+    "agnx": ">=1.0.0"
+  },
+  "main": "./dist/index.js",
+  "contributes": {
+    "commands": [
+      {
+        "id": "boujoy-harness.open",
+        "title": "Boujoy 工作台"
+      }
+    ],
+    "panels": [
+      {
+        "id": "boujoy-harness.main",
+        "title": "Boujoy 工作台"
+      }
+    ]
+  }
+}
