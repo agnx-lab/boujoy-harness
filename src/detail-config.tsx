@@ -44,24 +44,32 @@ function chipStyle(
   busy: boolean,
 ): ViewStyle {
   const dark = colorScheme !== "light";
-  const visibleBorder = dark ? "rgba(255,255,255,0.48)" : "rgba(0,0,0,0.28)";
-  const showBorder = hovered || pressed;
+  const showFrame = hovered || pressed;
   return {
+    // 强制内容宽，禁止被右栏 stretch 成满宽灰砖
     alignSelf: "flex-start",
     flexGrow: 0,
     flexShrink: 0,
-    borderWidth: 1.5,
+    borderWidth: showFrame ? 1.5 : 0,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
     minHeight: 30,
     justifyContent: "center",
     alignItems: "center",
-    borderColor: showBorder ? visibleBorder : "transparent",
-    backgroundColor: pressed
+    borderColor: showFrame
       ? dark
-        ? "rgba(255,255,255,0.12)"
-        : "rgba(0,0,0,0.06)"
+        ? "rgba(255,255,255,0.48)"
+        : "rgba(0,0,0,0.28)"
+      : "transparent",
+    backgroundColor: showFrame
+      ? pressed
+        ? dark
+          ? "rgba(255,255,255,0.26)"
+          : "rgba(0,0,0,0.12)"
+        : dark
+          ? "rgba(255,255,255,0.16)"
+          : "rgba(0,0,0,0.06)"
       : "transparent",
     opacity: busy ? 0.5 : 1,
   };
@@ -267,7 +275,6 @@ function PathDetailField({
     flexDirection: "row",
     flexWrap: "nowrap",
     alignItems: "center",
-    alignSelf: "flex-end",
     gap: 6,
   };
 
@@ -276,14 +283,12 @@ function PathDetailField({
       style={{
         display: "flex",
         flexDirection: "column",
-        alignSelf: "flex-end",
-        alignItems: "flex-end",
         maxWidth: "100%",
         gap: 6,
       }}
       testID={`boujoy-path-field-${field}`}
     >
-      <Text style={[pathTextStyle, { textAlign: "right" }]} selectable>
+      <Text style={pathTextStyle} selectable>
         {value || emptyHint}
       </Text>
       <View style={chipRowStyle}>
