@@ -37,36 +37,6 @@ function setCachedBoujoyPaths(next: BoujoyPathsConfigDocument): void {
 
 type PathFieldKey = "vault" | "dshRoot" | "python";
 
-function chipStyle(
-  colorScheme: string,
-  pressed: boolean,
-  hovered: boolean,
-  busy: boolean,
-): ViewStyle {
-  const dark = colorScheme !== "light";
-  const visibleBorder = dark ? "rgba(255,255,255,0.48)" : "rgba(0,0,0,0.28)";
-  const showBorder = hovered || pressed;
-  return {
-    alignSelf: "flex-start",
-    flexGrow: 0,
-    flexShrink: 0,
-    borderWidth: 1.5,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    minHeight: 30,
-    justifyContent: "center",
-    alignItems: "center",
-    borderColor: showBorder ? visibleBorder : "transparent",
-    backgroundColor: pressed
-      ? dark
-        ? "rgba(255,255,255,0.12)"
-        : "rgba(0,0,0,0.06)"
-      : "transparent",
-    opacity: busy ? 0.5 : 1,
-  };
-}
-
 function PathDetailField({
   field,
   emptyHint,
@@ -163,12 +133,6 @@ function PathDetailField({
     lineHeight: 16,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: value ? theme.colors.foreground : theme.colors.foregroundMuted,
-  };
-
-  const btnTextStyle: TextStyle = {
-    fontSize: 12,
-    fontWeight: "500",
-    color: theme.colors.foreground,
   };
 
   const errorStyle: TextStyle = {
@@ -271,6 +235,8 @@ function PathDetailField({
     gap: 6,
   };
 
+  const Chip = getBoundHost()?.ui?.Chip;
+
   return (
     <View
       style={{
@@ -287,26 +253,30 @@ function PathDetailField({
         {value || emptyHint}
       </Text>
       <View style={chipRowStyle}>
-        <Pressable
-          accessibilityRole="button"
-          disabled={busy}
-          onPress={() => void onPickDirectory()}
-          style={({ pressed, hovered }) =>
-            chipStyle(theme.colorScheme, pressed, hovered ?? false, busy)
-          }
-        >
-          <Text style={btnTextStyle}>{busy ? "…" : "选择目录"}</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          disabled={busy}
-          onPress={() => void onClear()}
-          style={({ pressed, hovered }) =>
-            chipStyle(theme.colorScheme, pressed, hovered ?? false, busy)
-          }
-        >
-          <Text style={btnTextStyle}>恢复</Text>
-        </Pressable>
+        {Chip ? (
+          <>
+            {createElement(Chip, {
+              label: busy ? "…" : "选择目录",
+              busy,
+              disabled: busy,
+              onPress: () => void onPickDirectory(),
+              testID: `boujoy-path-pick-${field}`,
+              accessibilityLabel: "选择目录",
+            })}
+            {createElement(Chip, {
+              label: "恢复",
+              busy,
+              disabled: busy,
+              onPress: () => void onClear(),
+              testID: `boujoy-path-restore-${field}`,
+              accessibilityLabel: "恢复",
+            })}
+          </>
+        ) : (
+          <Text style={{ fontSize: 12, color: theme.colors.foregroundMuted }}>
+            （需重启 Electron 以加载 host.ui.Chip）
+          </Text>
+        )}
       </View>
       {error ? <Text style={errorStyle}>{error}</Text> : null}
     </View>
