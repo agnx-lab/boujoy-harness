@@ -263,7 +263,6 @@ function PathDetailField({
     flexDirection: "row",
     flexWrap: "nowrap",
     alignItems: "center",
-    alignSelf: "flex-end",
     gap: 6,
   };
 
@@ -272,14 +271,12 @@ function PathDetailField({
       style={{
         display: "flex",
         flexDirection: "column",
-        alignItems: "flex-end",
-        alignSelf: "flex-end",
         maxWidth: "100%",
         gap: 6,
       }}
       testID={`boujoy-path-field-${field}`}
     >
-      <Text style={[pathTextStyle, { textAlign: "right" }]} selectable>
+      <Text style={pathTextStyle} selectable>
         {value || emptyHint}
       </Text>
       <View style={chipRowStyle}>
