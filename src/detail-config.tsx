@@ -119,6 +119,12 @@ function PathDetailField({
     await persist(value.trim());
   }, [persist, value]);
 
+  /** 详情分组卡是 surface2；按钮须抬层，禁止 input/surface2 同色糊底。 */
+  const secondaryBg = theme.colors.popover || theme.colors.surface0;
+  const secondaryBorder = theme.colors.border;
+  const primaryBg = theme.colors.accent;
+  const primaryFg = theme.colors.accentForeground || theme.colors.background;
+
   return (
     <View style={styles.wrap} testID={`boujoy-path-field-${field}`}>
       {directory ? (
@@ -138,7 +144,7 @@ function PathDetailField({
             {
               color: theme.colors.foreground,
               borderColor: theme.colors.border,
-              backgroundColor: theme.colors.input,
+              backgroundColor: secondaryBg,
             },
           ]}
           value={value}
@@ -161,9 +167,9 @@ function PathDetailField({
               style={({ pressed }) => [
                 styles.btn,
                 {
-                  borderColor: theme.colors.border,
-                  backgroundColor: theme.colors.input,
-                  opacity: busy ? 0.5 : pressed ? 0.85 : 1,
+                  borderColor: secondaryBorder,
+                  backgroundColor: pressed ? theme.colors.surface1 || secondaryBg : secondaryBg,
+                  opacity: busy ? 0.5 : 1,
                 },
               ]}
             >
@@ -178,9 +184,9 @@ function PathDetailField({
               style={({ pressed }) => [
                 styles.btn,
                 {
-                  borderColor: theme.colors.border,
-                  backgroundColor: theme.colors.surface1 || theme.colors.input,
-                  opacity: busy ? 0.5 : pressed ? 0.85 : 1,
+                  borderColor: secondaryBorder,
+                  backgroundColor: pressed ? theme.colors.surface1 || secondaryBg : secondaryBg,
+                  opacity: busy ? 0.5 : 1,
                 },
               ]}
             >
@@ -195,17 +201,12 @@ function PathDetailField({
             style={({ pressed }) => [
               styles.btnPrimary,
               {
-                backgroundColor: theme.colors.accent,
-                opacity: busy ? 0.5 : pressed ? 0.85 : 1,
+                backgroundColor: primaryBg,
+                opacity: busy ? 0.5 : pressed ? 0.88 : 1,
               },
             ]}
           >
-            <Text
-              style={[
-                styles.btnText,
-                { color: theme.colors.accentForeground || theme.colors.background, fontWeight: "600" },
-              ]}
-            >
+            <Text style={[styles.btnText, { color: primaryFg, fontWeight: "600" }]}>
               {busy ? "处理中…" : "保存路径"}
             </Text>
           </Pressable>
@@ -309,22 +310,22 @@ const styles = StyleSheet.create(
       flexWrap: "wrap",
       gap: 8,
     },
-    /** 次级操作：实心 input 底 + 描边，暗色下也能看出是控件。 */
+    /** 次级按钮：popover/surface0 抬层 + 描边，与 surface2 分组卡拉开对比。 */
     btn: {
       borderWidth: 1,
       borderRadius: 8,
       paddingHorizontal: 12,
       paddingVertical: 7,
-      minHeight: 30,
+      minHeight: 32,
       justifyContent: "center",
       alignItems: "center",
     },
-    /** 主操作：accent 实心，对标 relay 详情保存钮。 */
+    /** 主操作：accent 实心。 */
     btnPrimary: {
       borderRadius: 8,
       paddingHorizontal: 14,
-      paddingVertical: 7,
-      minHeight: 30,
+      paddingVertical: 8,
+      minHeight: 32,
       justifyContent: "center",
       alignItems: "center",
     },
