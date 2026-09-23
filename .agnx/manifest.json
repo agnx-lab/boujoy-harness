@@ -1,0 +1,35 @@
+{
+  "id": "boujoy-harness",
+  "name": "Boujoy 工作台",
+  "version": "0.2.20",
+  "engines": {
+    "agnx": ">=1.0.0"
+  },
+  "main": "./dist/index.js",
+  "icon": "./assets/boujoy-b-icon.svg",
+  "sidecar": {
+    "supervised": false,
+    "ensureTool": "tools/ensure-boujoy-gateway.mjs",
+    "stateFile": "boujoy-gateway.json",
+    "defaultPort": 8766
+  },
+  "guest": {
+    "kind": "web",
+    "auth": "none",
+    "preferStrategy": "auto"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "boujoy-harness.open",
+        "title": "Boujoy 工作台"
+      }
+    ],
+    "panels": [
+      {
+        "id": "boujoy-harness.main",
+        "title": "Boujoy 工作台"
+      }
+    ]
+  }
+}
