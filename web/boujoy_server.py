@@ -1154,13 +1154,26 @@ class BoujoyHandler(BaseHTTPRequestHandler):
             self._deny_access()
             return
         if path == "/api/heartbeat":
-            self._json({"ok": True, "product": "Boujoy Harness"})
+            payload = {"ok": True, "product": "Boujoy Harness"}
+            instance_id = os.environ.get("AGNX_SIDECAR_INSTANCE")
+            if instance_id:
+                payload["instanceId"] = instance_id
+            self._json(payload)
             return
         if path == "/api/health":
             # This is intentionally the product gateway's readiness signal.
             # The optional standalone knowledge preview and lazy clean Harness
             # are not prerequisites for rendering the main product shell.
-            self._json({"ok": True, "ready": True, "pid": os.getpid(), "services": {"product": True, "gateway": True}})
+            payload = {
+                "ok": True,
+                "ready": True,
+                "pid": os.getpid(),
+                "services": {"product": True, "gateway": True},
+            }
+            instance_id = os.environ.get("AGNX_SIDECAR_INSTANCE")
+            if instance_id:
+                payload["instanceId"] = instance_id
+            self._json(payload)
             return
         if path == "/api/config":
             self._json({"ok": True, "vaultName": self.config.vault.name})

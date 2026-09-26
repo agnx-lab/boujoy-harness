@@ -1,14 +1,14 @@
 {
-  "id": "com.agnx.boujoy-harness",
+  "id": "boujoy-harness",
   "name": "Boujoy 工作台",
-  "version": "0.2.20",
+  "version": "0.2.21",
   "engines": {
     "agnx": ">=1.0.0"
   },
   "main": "./.agnx/dist/index.js",
   "icon": "./assets/boujoy-b-icon.svg",
   "sidecar": {
-    "supervised": false,
+    "supervised": true,
     "ensureTool": "tools/ensure-boujoy-gateway.mjs",
     "stateFile": "boujoy-gateway.json",
     "defaultPort": 8766

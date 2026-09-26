@@ -3,7 +3,9 @@
  * 场景：短跑 sidecar — 确保 Boujoy 网关（+ 可选 DSH）已起；路径变更则停旧再起。
  * 用法：node tools/ensure-boujoy-gateway.mjs [--work-dir <dataRoot>] [--vault <path>]
  *       [--dsh-root <path>] [--python <bin>] [--knowledge-home <path>] [--clean-home <path>] [--port <n>]
- * stdout：单行 JSON { ok, port, origin, reused, pid, vault, dshRoot, warnings? }
+ *       [--supervised] [--force-restart]
+ * stdout：单行 JSON { ok, port, origin, reused, pid, vault, dshRoot, warnings? }；
+ *         --supervised 时含 plan 供 daemon spawn（ensure 本身不长驻）
  */
 import { execFileSync, spawn } from "node:child_process";
 import { access, constants as fsConstants, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -28,6 +30,8 @@ function parseArgs(argv) {
   let knowledgeHome = "";
   let cleanHome = "";
   let port = defaultPort;
+  let supervised = false;
+  let forceRestart = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
@@ -55,6 +59,10 @@ function parseArgs(argv) {
         port = n;
       }
       i += 1;
+    } else if (arg === "--supervised") {
+      supervised = true;
+    } else if (arg === "--force-restart" || arg === "--forceRestart") {
+      forceRestart = true;
     }
   }
   const resolvedDsh = dshRoot ? path.resolve(dshRoot) : "";
@@ -74,6 +82,8 @@ function parseArgs(argv) {
         ? path.join(resolvedDsh, "clean-home")
         : "",
     port,
+    supervised,
+    forceRestart,
   };
 }
 
@@ -289,21 +299,15 @@ async function waitForHealth(port, timeoutMs = 45_000) {
 }
 
 function spawnDetached(command, args, { cwd, env }) {
+  // stdio ignore：避免 parent 因 pipe 句柄永不退出（曾泄漏 ensure 进程）
   const child = spawn(command, args, {
     cwd,
     env,
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let errBuf = "";
-  child.stderr?.on("data", (chunk) => {
-    errBuf += chunk.toString();
-    if (errBuf.length > 8000) {
-      errBuf = errBuf.slice(-8000);
-    }
+    stdio: "ignore",
   });
   child.unref();
-  return { child, getStderr: () => errBuf };
+  return { child, getStderr: () => "" };
 }
 
 async function ensureDsh({ dshRoot, home, port, clean, vault, warnings }) {
@@ -334,6 +338,45 @@ async function ensureDsh({ dshRoot, home, port, clean, vault, warnings }) {
   return child.pid ?? null;
 }
 
+function buildGatewayArgs(cfg) {
+  const gatewayArgs = [
+    gatewayScript,
+    "--port",
+    String(cfg.port),
+    "--vault",
+    cfg.vault,
+    "--static",
+    path.join(appRoot, "web"),
+  ];
+  if (cfg.knowledgeHome) {
+    gatewayArgs.push("--knowledge-home", cfg.knowledgeHome);
+  }
+  if (cfg.cleanHome) {
+    gatewayArgs.push("--clean-home", cfg.cleanHome);
+  }
+  return gatewayArgs;
+}
+
+function buildSupervisedPlan(cfg, wantedFp) {
+  return {
+    ok: true,
+    plan: {
+      command: cfg.python,
+      args: buildGatewayArgs(cfg),
+      cwd: path.join(appRoot, "web"),
+      env: {
+        PYTHONDONTWRITEBYTECODE: "1",
+        BOUJOY_DISABLE_PARENT_WATCH: "1",
+        BOUJOY_ALLOW_IFRAME: "1",
+      },
+      fingerprint: wantedFp,
+      healthUrl: `http://127.0.0.1:${cfg.port}/api/health`,
+      port: cfg.port,
+      launchMode: "gateway",
+    },
+  };
+}
+
 async function main() {
   const cfg = parseArgs(process.argv.slice(2));
   const warnings = [];
@@ -352,6 +395,44 @@ async function main() {
   await mkdir(cfg.workDir, { recursive: true });
   const statePath = path.join(cfg.workDir, "boujoy-gateway.json");
   const wantedFp = fingerprint(cfg);
+
+  if (cfg.supervised) {
+    if (!cfg.forceRestart) {
+      const existing = await readState(statePath);
+      if (existing && sameFingerprint(existing.fingerprint, wantedFp) && (await isGatewayHealthy(existing.port))) {
+        const health = await httpGetJson(`http://127.0.0.1:${existing.port}/api/health`);
+        console.log(
+          JSON.stringify({
+            ok: true,
+            reused: true,
+            port: existing.port,
+            pid: health?.pid ?? existing.pid ?? null,
+            origin: `http://127.0.0.1:${existing.port}`,
+            vault: cfg.vault,
+            dshRoot: cfg.dshRoot || "",
+            healthUrl: `http://127.0.0.1:${existing.port}/api/health`,
+            instanceId: health?.instanceId ?? existing.instanceId ?? undefined,
+            warnings: existing.warnings || [],
+          }),
+        );
+        return;
+      }
+    }
+    const planned = buildSupervisedPlan(cfg, wantedFp);
+    console.log(
+      JSON.stringify({
+        ok: true,
+        reused: false,
+        port: cfg.port,
+        origin: `http://127.0.0.1:${cfg.port}`,
+        vault: cfg.vault,
+        dshRoot: cfg.dshRoot || "",
+        warnings,
+        plan: planned.plan,
+      }),
+    );
+    return;
+  }
 
   const existing = await readState(statePath);
   if (existing && (await isGatewayHealthy(existing.port))) {
@@ -455,21 +536,7 @@ async function main() {
     }
   }
 
-  const gatewayArgs = [
-    gatewayScript,
-    "--port",
-    String(cfg.port),
-    "--vault",
-    cfg.vault,
-    "--static",
-    path.join(appRoot, "web"),
-  ];
-  if (cfg.knowledgeHome) {
-    gatewayArgs.push("--knowledge-home", cfg.knowledgeHome);
-  }
-  if (cfg.cleanHome) {
-    gatewayArgs.push("--clean-home", cfg.cleanHome);
-  }
+  const gatewayArgs = buildGatewayArgs(cfg);
 
   const { child, getStderr } = spawnDetached(cfg.python, gatewayArgs, {
     cwd: path.join(appRoot, "web"),
