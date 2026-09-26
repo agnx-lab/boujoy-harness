@@ -38,13 +38,29 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from harness_bridge import (
+    HarnessEngine,
+    build_engines,
+    map_endpoint,
+    rewrite_client_request_body,
+    synthesize_host_describe,
+    synthesize_workspaces_from_sessions,
+)
+
 
 LOOPBACK = "127.0.0.1"
 KB_ORIGIN = "http://127.0.0.1:8765"
+# Defaults; overwritten at process start from CLI (Boujoy-owned engines use 3180/3181).
 HARNESS_ORIGINS = {
-    "knowledge": "http://127.0.0.1:3080",
-    "clean": "http://127.0.0.1:3081",
+    "knowledge": "http://127.0.0.1:3180",
+    "clean": "http://127.0.0.1:3181",
 }
+HARNESS_ENGINES: dict[str, HarnessEngine] = build_engines(
+    HARNESS_ORIGINS["knowledge"],
+    HARNESS_ORIGINS["clean"],
+    "",
+    "",
+)
 # CORS allow-list: only loopback product surfaces may call this gateway's APIs.
 # Any other Origin (e.g. an arbitrary website open in the browser) must not be
 # able to read the vault or drive write endpoints. "null" covers file:// pages.
@@ -55,6 +71,10 @@ ALLOWED_ORIGINS = {
     "http://localhost:3080",
     "http://127.0.0.1:3081",
     "http://localhost:3081",
+    "http://127.0.0.1:3180",
+    "http://localhost:3180",
+    "http://127.0.0.1:3181",
+    "http://localhost:3181",
     "null",
 }
 
@@ -99,7 +119,7 @@ def _ws_accept_key(key: str) -> str:
     return base64.b64encode(digest).decode("ascii")
 
 
-def _ws_handshake(upstream: socket.socket, path: str, host: str) -> bytes | None:
+def _ws_handshake(upstream: socket.socket, path: str, host: str, cookie: str = "") -> bytes | None:
     """Upgrade to Harness as a client and return bytes after the HTTP header.
 
     A server may coalesce its first WebSocket frame with the HTTP 101 response.
@@ -107,6 +127,7 @@ def _ws_handshake(upstream: socket.socket, path: str, host: str) -> bytes | None
     the normal byte pump; otherwise an initial ``session/subscribed`` frame can
     be silently lost.
     """
+    cookie_line = f"Cookie: {cookie}\r\n" if cookie else ""
     request = (
         f"GET {path} HTTP/1.1\r\n"
         f"Host: {host}\r\n"
@@ -114,6 +135,7 @@ def _ws_handshake(upstream: socket.socket, path: str, host: str) -> bytes | None
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         f"Sec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode('ascii')}\r\n"
+        f"{cookie_line}"
         "\r\n"
     )
     upstream.sendall(request.encode("ascii"))
@@ -600,19 +622,29 @@ class BoujoyHandler(BaseHTTPRequestHandler):
         self._headers(200, content_type, len(data))
         self.wfile.write(data)
 
-    def _proxy(self, target: str, method: str = "GET", body: bytes | None = None, stream: bool = False, filter_deleted: bool = False) -> None:
+    def _proxy(self, target: str, method: str = "GET", body: bytes | None = None, stream: bool = False, filter_deleted: bool = False, cookie: str = "") -> None:
         headers = {
             "Accept": self.headers.get("Accept", "application/json"),
             "User-Agent": "Boujoy-Harness/1.0",
         }
         if body is not None:
             headers["Content-Type"] = self.headers.get("Content-Type", "application/json")
+        if cookie:
+            headers["Cookie"] = cookie
         if target.startswith(KB_ORIGIN):
             headers.update({
                 "Origin": KB_ORIGIN,
                 "Referer": KB_ORIGIN + "/",
                 "Sec-Fetch-Site": "same-origin",
                 "Sec-Fetch-Mode": "cors",
+            })
+        else:
+            # dsh web trusts same-origin browser calls; gateway must present the engine origin.
+            parsed = urllib.parse.urlparse(target)
+            engine_origin = f"{parsed.scheme}://{parsed.netloc}"
+            headers.update({
+                "Origin": engine_origin,
+                "Referer": engine_origin + "/",
             })
         request = urllib.request.Request(target, data=body, headers=headers, method=method)
         try:
@@ -647,6 +679,70 @@ class BoujoyHandler(BaseHTTPRequestHandler):
             self._error(502, f"本地服务未就绪：{getattr(exc, 'reason', exc)}")
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    def _harness_engine(self, mode: str) -> HarnessEngine:
+        engine = HARNESS_ENGINES.get(mode)
+        if engine is None:
+            raise KeyError(mode)
+        return engine
+
+    def _proxy_harness_rpc(self, mode: str, legacy_endpoint: str, body: bytes | None, filter_deleted: bool = False) -> None:
+        """Bridge Boujoy dotted RPC onto modern dsh web (auth cookie + slash paths)."""
+        engine = self._harness_engine(mode)
+        # Synthetic endpoints that no longer exist as HTTP RPCs.
+        if legacy_endpoint in {"host.describe", "host/describe"}:
+            payload = {
+                "type": "server-response",
+                "rpcId": "boujoy-host",
+                "result": {"ok": True, "value": synthesize_host_describe()},
+            }
+            data = compact_json(payload)
+            self._headers(200, "application/json", len(data))
+            self.wfile.write(data)
+            return
+        if legacy_endpoint in {"workspace.list", "workspace/list"}:
+            mapped, rewritten = rewrite_client_request_body("session.list", body)
+            cookie = engine.auth.cookie_header()
+            target = f"{engine.origin}/api/{mapped}"
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "Boujoy-Harness/1.0",
+                "Origin": engine.origin,
+                "Referer": engine.origin + "/",
+            }
+            if cookie:
+                headers["Cookie"] = cookie
+            request = urllib.request.Request(target, data=rewritten, headers=headers, method="POST")
+            try:
+                with LOCAL_OPENER.open(request, timeout=20) as response:
+                    raw = response.read()
+                parsed = json.loads(raw)
+                value = parsed.get("result", {}).get("value") if isinstance(parsed, dict) else None
+                workspaces = synthesize_workspaces_from_sessions(value)
+                out = {
+                    "type": "server-response",
+                    "rpcId": parsed.get("rpcId") if isinstance(parsed, dict) else "boujoy-ws",
+                    "result": {"ok": True, "value": workspaces},
+                }
+                data = compact_json(out)
+                self._headers(200, "application/json", len(data))
+                self.wfile.write(data)
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+                self._error(502, f"本地服务未就绪：{getattr(exc, 'reason', exc)}")
+            except Exception as exc:
+                self._error(502, f"workspace.list 适配失败：{exc}")
+            return
+
+        mapped, rewritten = rewrite_client_request_body(legacy_endpoint, body)
+        cookie = engine.auth.cookie_header()
+        self._proxy(
+            f"{engine.origin}/api/{mapped}",
+            method="POST",
+            body=rewritten,
+            filter_deleted=filter_deleted,
+            cookie=cookie,
+        )
 
     def _record_folder(self, kind: str) -> Path:
         if kind not in self.config.records:
@@ -1429,21 +1525,39 @@ class BoujoyHandler(BaseHTTPRequestHandler):
                 if not self._require_access(parsed):
                     self._deny_access()
                     return
-                self._ws_upgrade(mode, f"/api/{endpoint}")
+                self._ws_upgrade(mode, endpoint)
                 return
-            self._proxy(f"{HARNESS_ORIGINS[mode]}/api/{endpoint}", stream=True)
+            # SSE/stream fallback (rare): still go through auth-aware proxy.
+            engine = self._harness_engine(mode)
+            mapped = map_endpoint(endpoint)
+            if mapped in {"events.mux", "events.host", "events/mux", "events/host"}:
+                mapped = "remote.mux"
+            self._proxy(
+                f"{engine.origin}/api/{mapped}",
+                stream=True,
+                cookie=engine.auth.cookie_header(),
+            )
             return
         self._serve_static(path)
 
     def _ws_upgrade(self, mode: str, path: str) -> None:
         """Answer the browser's WebSocket upgrade, then bridge to Harness."""
         key = self.headers.get("Sec-WebSocket-Key", "")
+        engine = self._harness_engine(mode)
+        legacy = path.removeprefix("/api/").lstrip("/")
+        mapped = map_endpoint(legacy)
+        if mapped in {"events.mux", "events.host", "events/mux", "events/host", "remote.mux"}:
+            upstream_path = "/api/remote.mux"
+        else:
+            upstream_path = f"/api/{mapped}"
         try:
-            upstream = socket.create_connection(("127.0.0.1", 3080 if mode == "knowledge" else 3081), timeout=10)
+            upstream = engine.open_upstream(upstream_path, timeout=10)
         except OSError:
             self._error(502, "Harness 事件流未就绪")
             return
-        initial_upstream_bytes = _ws_handshake(upstream, path, "127.0.0.1:3080" if mode == "knowledge" else "127.0.0.1:3081")
+        host_header = f"{engine.host}:{engine.port}"
+        cookie = engine.auth.cookie_header()
+        initial_upstream_bytes = _ws_handshake(upstream, upstream_path, host_header, cookie=cookie)
         if initial_upstream_bytes is None:
             try:
                 upstream.close()
@@ -1535,10 +1649,10 @@ class BoujoyHandler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/api/harness/(knowledge|clean)/(.+)", path)
         if match:
             mode, endpoint = match.groups()
-            self._proxy(
-                f"{HARNESS_ORIGINS[mode]}/api/{endpoint}",
-                method="POST",
-                body=body,
+            self._proxy_harness_rpc(
+                mode,
+                endpoint,
+                body,
                 filter_deleted=endpoint in {"session.list", "session.search", "workspace.list"},
             )
             return
@@ -1657,6 +1771,27 @@ class BoujoyServer(ThreadingHTTPServer):
         self.access_attempts: dict[str, list[float]] = {}
 
 
+def configure_harness_engines(
+    *,
+    knowledge_port: int,
+    clean_port: int,
+    knowledge_auth: str,
+    clean_auth: str,
+) -> None:
+    global HARNESS_ORIGINS, HARNESS_ENGINES
+    knowledge_origin = f"http://{LOOPBACK}:{knowledge_port}"
+    clean_origin = f"http://{LOOPBACK}:{clean_port}"
+    HARNESS_ORIGINS = {"knowledge": knowledge_origin, "clean": clean_origin}
+    HARNESS_ENGINES = build_engines(
+        knowledge_origin,
+        clean_origin,
+        knowledge_auth or knowledge_origin,
+        clean_auth or clean_origin,
+    )
+    for origin in (knowledge_origin, clean_origin, knowledge_origin.replace("127.0.0.1", "localhost"), clean_origin.replace("127.0.0.1", "localhost")):
+        ALLOWED_ORIGINS.add(origin)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8766)
@@ -1664,9 +1799,19 @@ def main() -> int:
     parser.add_argument("--static", required=True)
     parser.add_argument("--knowledge-home")
     parser.add_argument("--clean-home")
+    parser.add_argument("--knowledge-port", type=int, default=3180)
+    parser.add_argument("--clean-port", type=int, default=3181)
+    parser.add_argument("--knowledge-auth-url", default="", help="dsh web URL with ?token= for knowledge engine")
+    parser.add_argument("--clean-auth-url", default="", help="dsh web URL with ?token= for clean engine")
     parser.add_argument("--access-code", default="", help="PIN for phone/remote access; empty disables remote access")
     parser.add_argument("--restart-file", help="managed-host restart signal file (used by the Windows launcher)")
     args = parser.parse_args()
+    configure_harness_engines(
+        knowledge_port=args.knowledge_port,
+        clean_port=args.clean_port,
+        knowledge_auth=args.knowledge_auth_url,
+        clean_auth=args.clean_auth_url,
+    )
     config = AppConfig(
         Path(args.vault),
         Path(args.static),

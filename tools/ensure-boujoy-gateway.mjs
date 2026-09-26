@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * 场景：短跑 sidecar — 确保 Boujoy 网关（+ 可选 DSH）已起；路径变更则停旧再起。
+ * 场景：短跑 sidecar — 确保 Boujoy 网关 + 专用 DSH 引擎（3180/3181）已起。
  * 用法：node tools/ensure-boujoy-gateway.mjs [--work-dir <dataRoot>] [--vault <path>]
  *       [--dsh-root <path>] [--python <bin>] [--knowledge-home <path>] [--clean-home <path>] [--port <n>]
  *       [--supervised] [--force-restart]
  * stdout：单行 JSON { ok, port, origin, reused, pid, vault, dshRoot, warnings? }；
- *         --supervised 时含 plan 供 daemon spawn（ensure 本身不长驻）
+ *         --supervised 时含 plan 供 daemon spawn（ensure 本身不长驻；DSH 仍由 ensure 拉起）
  */
 import { execFileSync, spawn } from "node:child_process";
 import { access, constants as fsConstants, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -19,8 +19,12 @@ const gatewayScript = path.join(appRoot, "web", "boujoy_server.py");
 const defaultVault = path.join(appRoot, "demo-vault");
 const defaultPython = "/usr/bin/python3";
 const defaultPort = 8766;
+/** 避开 deepseek-harness 默认 3080；Boujoy 自管引擎用专用口。 */
+const DEFAULT_KNOWLEDGE_PORT = 3180;
+const DEFAULT_CLEAN_PORT = 3181;
 /** Boujoy 心跳 product 字段；禁止把同端口其它 HTTP 服务当健康。 */
 const BOUJOY_PRODUCT_MARKER = "Boujoy Harness";
+const AUTH_URL_RE = /https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s"'\\]+/g;
 
 function parseArgs(argv) {
   let workDir = process.env.AGNX_APP_DATA_ROOT || "";
@@ -65,22 +69,19 @@ function parseArgs(argv) {
       forceRestart = true;
     }
   }
+  const resolvedWork = workDir || path.join(appRoot, ".agnx-boujoy-runtime");
   const resolvedDsh = dshRoot ? path.resolve(dshRoot) : "";
   return {
-    workDir: workDir || path.join(appRoot, ".agnx-boujoy-runtime"),
+    workDir: resolvedWork,
     vault: path.resolve(vault || process.env.BOUJOY_VAULT_DIR || defaultVault),
     dshRoot: resolvedDsh,
     python: python || process.env.BOUJOY_PYTHON_BIN || defaultPython,
     knowledgeHome: knowledgeHome
       ? path.resolve(knowledgeHome)
-      : resolvedDsh
-        ? path.join(resolvedDsh, "home")
-        : "",
-    cleanHome: cleanHome
-      ? path.resolve(cleanHome)
-      : resolvedDsh
-        ? path.join(resolvedDsh, "clean-home")
-        : "",
+      : path.join(resolvedWork, "dsh-knowledge-home"),
+    cleanHome: cleanHome ? path.resolve(cleanHome) : path.join(resolvedWork, "dsh-clean-home"),
+    knowledgePort: DEFAULT_KNOWLEDGE_PORT,
+    cleanPort: DEFAULT_CLEAN_PORT,
     port,
     supervised,
     forceRestart,
@@ -94,6 +95,8 @@ function fingerprint(cfg) {
     python: cfg.python,
     knowledgeHome: cfg.knowledgeHome || "",
     cleanHome: cfg.cleanHome || "",
+    knowledgePort: cfg.knowledgePort,
+    cleanPort: cfg.cleanPort,
     port: cfg.port,
   });
 }
@@ -106,7 +109,6 @@ function httpGetOk(url, timeoutMs = 2500) {
   return new Promise((resolve) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
       res.resume();
-      // 仅 2xx：404/3xx 不得当「网关已起」（曾误把同口 Jev 当 Boujoy）
       resolve(res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300);
     });
     req.on("timeout", () => {
@@ -207,7 +209,6 @@ async function isGatewayHealthy(port) {
   return isBoujoyHeartbeatBody(heartbeat);
 }
 
-/** 任意 HTTP 应答（含 404）= 端口上有服务；连接失败才算空闲。 */
 function httpResponds(url, timeoutMs = 2500) {
   return new Promise((resolve) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
@@ -222,7 +223,6 @@ function httpResponds(url, timeoutMs = 2500) {
   });
 }
 
-/** 端口上有任意 HTTP 应答，但不是 Boujoy 指纹 → 禁止 reuse / 禁止误报启动成功。 */
 async function isForeignHttpOnPort(port) {
   if (!Number.isFinite(port) || port <= 0) {
     return false;
@@ -276,6 +276,10 @@ function stopExisting(existing) {
       stopPid(child);
     }
   }
+  if (existing?.engines) {
+    stopPid(existing.engines.knowledge?.pid);
+    stopPid(existing.engines.clean?.pid);
+  }
 }
 
 async function pathExists(filePath) {
@@ -298,34 +302,168 @@ async function waitForHealth(port, timeoutMs = 45_000) {
   return false;
 }
 
-function spawnDetached(command, args, { cwd, env }) {
-  // stdio ignore：避免 parent 因 pipe 句柄永不退出（曾泄漏 ensure 进程）
+function spawnDetached(command, args, { cwd, env, captureOutput = false }) {
+  // dsh web 把带 token 的 URL 打在 stdout（`dsh web: http://127.0.0.1:PORT/?token=…`），
+  // 必须 pipe stdout；stderr 一并收，便于超时诊断。
   const child = spawn(command, args, {
     cwd,
     env,
     detached: true,
-    stdio: "ignore",
+    stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "ignore",
   });
+  let outBuf = "";
+  const append = (chunk) => {
+    outBuf += chunk.toString();
+    if (outBuf.length > 16_000) {
+      outBuf = outBuf.slice(-16_000);
+    }
+  };
+  if (captureOutput) {
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+  }
   child.unref();
-  return { child, getStderr: () => "" };
+  return { child, getOutput: () => outBuf, getStderr: () => outBuf };
 }
 
-async function ensureDsh({ dshRoot, home, port, clean, vault, warnings }) {
-  if (!dshRoot) {
+/** pnpm 根仓未必链接 `.bin/dsh`；build 后 CLI 在 apps/cli/lib/bin.js */
+async function resolveDshLaunch(dshRoot) {
+  const binLink = path.join(dshRoot, "node_modules", ".bin", "dsh");
+  if (await pathExists(binLink)) {
+    return { command: binLink, argsPrefix: [], via: "node_modules/.bin/dsh" };
+  }
+  const cliBin = path.join(dshRoot, "apps", "cli", "lib", "bin.js");
+  if (await pathExists(cliBin)) {
+    return { command: process.execPath, argsPrefix: [cliBin], via: "apps/cli/lib/bin.js" };
+  }
+  return null;
+}
+
+async function resolveDefaultDshRoot(explicit) {
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  const sibling = path.resolve(appRoot, "..", "deepseek-harness");
+  if (await resolveDshLaunch(sibling)) {
+    return sibling;
+  }
+  return "";
+}
+
+function extractAuthUrl(text, port) {
+  const matches = String(text || "").match(AUTH_URL_RE) || [];
+  for (const raw of matches) {
+    const url = raw.replace(/[.,;]+$/u, "");
+    if (url.includes(`:${port}/`)) {
+      return url;
+    }
+  }
+  return null;
+}
+
+async function waitForAuthUrl({ port, getOutput, timeoutMs = 90_000 }) {
+  const deadline = Date.now() + timeoutMs;
+  let lastUrl = null;
+  while (Date.now() < deadline) {
+    const fromOut = extractAuthUrl(getOutput(), port);
+    if (fromOut) {
+      lastUrl = fromOut;
+      // Token 页应 2xx；部分时机 bind 尚未完成，短暂重试。
+      if (await httpGetOk(fromOut)) {
+        return fromOut;
+      }
+      if (await httpResponds(`http://127.0.0.1:${port}/`)) {
+        // 口已听且 stdout 已有 token → 视为成功（后续 gateway 会再换 cookie）
+        return fromOut;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  if (lastUrl) {
+    return lastUrl;
+  }
+  return null;
+}
+
+/** 停掉占用 Boujoy 引擎口的旧 dsh（避免半拉进程挡 ensure）。 */
+function stopForeignListenerOnPort(port) {
+  try {
+    const out = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+      encoding: "utf8",
+      timeout: 2000,
+    }).trim();
+    for (const line of out.split(/\s+/).filter(Boolean)) {
+      const pid = Number(line);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        continue;
+      }
+      try {
+        const cmd = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+          encoding: "utf8",
+          timeout: 2000,
+        }).trim();
+        if (cmd.includes("bin.js") && cmd.includes("web") && cmd.includes(String(port))) {
+          stopPid(pid);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // no listener
+  }
+}
+
+/**
+ * 拉起 Boujoy 专用 dsh web；返回 { pid, port, authUrl } 或 null。
+ * 若 state 已有可用 authUrl 且端口仍听 → 复用。
+ */
+async function ensureDshEngine({
+  dshRoot,
+  dshLaunch,
+  home,
+  port,
+  cwd,
+  label,
+  prior,
+  warnings,
+  forceRestart,
+}) {
+  if (!dshRoot || !dshLaunch) {
     return null;
   }
-  const dshBin = path.join(dshRoot, "node_modules", ".bin", "dsh");
-  if (!(await pathExists(dshBin))) {
-    warnings.push(`未找到 dsh：${dshBin}（请在详情配置填写正确的 DeepSeek Harness 根目录）`);
+  const priorAuth =
+    typeof prior?.authUrl === "string" && prior.authUrl.includes("token=") ? prior.authUrl : "";
+  if (
+    !forceRestart &&
+    priorAuth &&
+    Number(prior?.pid) > 0 &&
+    isPidAlive(prior.pid) &&
+    (await httpGetOk(priorAuth))
+  ) {
+    return { pid: prior.pid, port, authUrl: priorAuth, reused: true };
+  }
+  if (!forceRestart && priorAuth && (await httpGetOk(priorAuth))) {
+    return { pid: prior?.pid ?? null, port, authUrl: priorAuth, reused: true };
+  }
+
+  if (await httpResponds(`http://127.0.0.1:${port}/`)) {
+    stopForeignListenerOnPort(port);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  if (await httpResponds(`http://127.0.0.1:${port}/`)) {
+    // 口上已有服务但不是我们带 token 的引擎 → 换不了口时告警并放弃
+    warnings.push(
+      `${label} 端口 ${port} 已被占用且无法复用带 token 的 dsh；请结束占用或改 Boujoy 引擎端口`,
+    );
     return null;
   }
-  if (await httpGetOk(`http://127.0.0.1:${port}/`)) {
-    return null;
-  }
+
   await mkdir(home, { recursive: true });
   const runtimeBin = path.join(dshRoot, "runtime", "bin");
-  const cwd = clean ? process.env.HOME || appRoot : vault;
-  const { child } = spawnDetached(dshBin, ["web", "--host", "127.0.0.1", "--port", String(port)], {
+  const webArgs = ["web", "--host", "127.0.0.1", "--port", String(port), "--no-open"];
+  const args = [...dshLaunch.argsPrefix, ...webArgs];
+  const { child, getOutput } = spawnDetached(dshLaunch.command, args, {
     cwd,
     env: {
       ...process.env,
@@ -334,11 +472,65 @@ async function ensureDsh({ dshRoot, home, port, clean, vault, warnings }) {
       DSH_TELEMETRY_DISABLED: "1",
       PATH: `${runtimeBin}:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ""}`,
     },
+    captureOutput: true,
   });
-  return child.pid ?? null;
+  const authUrl = await waitForAuthUrl({ port, getOutput, timeoutMs: 90_000 });
+  if (!authUrl) {
+    const preview = getOutput().trim().slice(-400);
+    stopPid(child.pid);
+    warnings.push(
+      `${label} dsh web 启动超时（端口 ${port}，未拿到 ?token= URL）${preview ? `；output=${preview}` : ""}`,
+    );
+    return null;
+  }
+  return { pid: child.pid ?? null, port, authUrl, reused: false };
 }
 
-function buildGatewayArgs(cfg) {
+async function ensureHarnessEngines(cfg, priorEngines, warnings) {
+  if (!cfg.dshRoot) {
+    warnings.push("未配置 dshRoot：仅网关 UI，Agent/纯净模式会提示本地服务未就绪");
+    return { knowledge: null, clean: null, childPids: [] };
+  }
+  const dshLaunch = await resolveDshLaunch(cfg.dshRoot);
+  if (!dshLaunch) {
+    warnings.push(
+      `未找到 dsh（${cfg.dshRoot}）。请在详情配置填写 DeepSeek Harness 根目录，并在该仓执行 pnpm install && pnpm run build`,
+    );
+    return { knowledge: null, clean: null, childPids: [] };
+  }
+  const knowledge = await ensureDshEngine({
+    dshRoot: cfg.dshRoot,
+    dshLaunch,
+    home: cfg.knowledgeHome,
+    port: cfg.knowledgePort,
+    cwd: cfg.vault,
+    label: "knowledge",
+    prior: priorEngines?.knowledge,
+    warnings,
+    forceRestart: cfg.forceRestart,
+  });
+  const clean = await ensureDshEngine({
+    dshRoot: cfg.dshRoot,
+    dshLaunch,
+    home: cfg.cleanHome,
+    port: cfg.cleanPort,
+    cwd: process.env.HOME || appRoot,
+    label: "clean",
+    prior: priorEngines?.clean,
+    warnings,
+    forceRestart: cfg.forceRestart,
+  });
+  const childPids = [];
+  if (knowledge?.pid) {
+    childPids.push(knowledge.pid);
+  }
+  if (clean?.pid) {
+    childPids.push(clean.pid);
+  }
+  return { knowledge, clean, childPids };
+}
+
+function buildGatewayArgs(cfg, engines) {
   const gatewayArgs = [
     gatewayScript,
     "--port",
@@ -347,6 +539,10 @@ function buildGatewayArgs(cfg) {
     cfg.vault,
     "--static",
     path.join(appRoot, "web"),
+    "--knowledge-port",
+    String(cfg.knowledgePort),
+    "--clean-port",
+    String(cfg.cleanPort),
   ];
   if (cfg.knowledgeHome) {
     gatewayArgs.push("--knowledge-home", cfg.knowledgeHome);
@@ -354,15 +550,21 @@ function buildGatewayArgs(cfg) {
   if (cfg.cleanHome) {
     gatewayArgs.push("--clean-home", cfg.cleanHome);
   }
+  if (engines?.knowledge?.authUrl) {
+    gatewayArgs.push("--knowledge-auth-url", engines.knowledge.authUrl);
+  }
+  if (engines?.clean?.authUrl) {
+    gatewayArgs.push("--clean-auth-url", engines.clean.authUrl);
+  }
   return gatewayArgs;
 }
 
-function buildSupervisedPlan(cfg, wantedFp) {
+function buildSupervisedPlan(cfg, wantedFp, engines) {
   return {
     ok: true,
     plan: {
       command: cfg.python,
-      args: buildGatewayArgs(cfg),
+      args: buildGatewayArgs(cfg, engines),
       cwd: path.join(appRoot, "web"),
       env: {
         PYTHONDONTWRITEBYTECODE: "1",
@@ -378,29 +580,53 @@ function buildSupervisedPlan(cfg, wantedFp) {
 }
 
 async function main() {
-  const cfg = parseArgs(process.argv.slice(2));
+  const raw = parseArgs(process.argv.slice(2));
   const warnings = [];
   await access(gatewayScript);
-  if (!(await pathExists(cfg.python))) {
+  if (!(await pathExists(raw.python))) {
     console.log(
       JSON.stringify({
         ok: false,
-        error: `Python 不存在：${cfg.python}（请在详情 → 配置填写可执行路径）`,
+        error: `Python 不存在：${raw.python}（请在详情 → 配置填写可执行路径）`,
       }),
     );
     process.exitCode = 1;
     return;
   }
+
+  const detectedDsh = await resolveDefaultDshRoot(raw.dshRoot);
+  const cfg = { ...raw, dshRoot: detectedDsh };
+  if (!raw.dshRoot && detectedDsh) {
+    warnings.push(`已自动探测 dshRoot=${detectedDsh}`);
+  }
+
   await mkdir(cfg.vault, { recursive: true });
   await mkdir(cfg.workDir, { recursive: true });
   const statePath = path.join(cfg.workDir, "boujoy-gateway.json");
   const wantedFp = fingerprint(cfg);
+  const existing = await readState(statePath);
 
   if (cfg.supervised) {
-    if (!cfg.forceRestart) {
-      const existing = await readState(statePath);
+    const engines = await ensureHarnessEngines(cfg, existing?.engines, warnings);
+    const enginesFresh = Boolean(engines.knowledge && !engines.knowledge.reused) || Boolean(engines.clean && !engines.clean.reused);
+    if (!cfg.forceRestart && !enginesFresh) {
       if (existing && sameFingerprint(existing.fingerprint, wantedFp) && (await isGatewayHealthy(existing.port))) {
         const health = await httpGetJson(`http://127.0.0.1:${existing.port}/api/health`);
+        const nextState = {
+          ...existing,
+          engines: {
+            knowledge: engines.knowledge,
+            clean: engines.clean,
+          },
+          childPids: engines.childPids,
+          warnings,
+          updatedAt: Date.now(),
+        };
+        try {
+          await writeFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+        } catch {
+          // ignore
+        }
         console.log(
           JSON.stringify({
             ok: true,
@@ -412,13 +638,41 @@ async function main() {
             dshRoot: cfg.dshRoot || "",
             healthUrl: `http://127.0.0.1:${existing.port}/api/health`,
             instanceId: health?.instanceId ?? existing.instanceId ?? undefined,
-            warnings: existing.warnings || [],
+            warnings,
           }),
         );
         return;
       }
     }
-    const planned = buildSupervisedPlan(cfg, wantedFp);
+    if (enginesFresh && existing && (await isGatewayHealthy(existing.port))) {
+      // 引擎换了 token，旧网关 CLI 仍持旧 auth → 停掉让 daemon 按新 plan 拉起
+      stopExisting(existing);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    const planned = buildSupervisedPlan(cfg, wantedFp, engines);
+    // 预写 engines，daemon spawn 网关后详情可读
+    try {
+      await writeFile(
+        statePath,
+        `${JSON.stringify(
+          {
+            port: cfg.port,
+            fingerprint: wantedFp,
+            vault: cfg.vault,
+            dshRoot: cfg.dshRoot || "",
+            engines: { knowledge: engines.knowledge, clean: engines.clean },
+            childPids: engines.childPids,
+            warnings,
+            updatedAt: Date.now(),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    } catch {
+      // ignore
+    }
     console.log(
       JSON.stringify({
         ok: true,
@@ -434,27 +688,34 @@ async function main() {
     return;
   }
 
-  const existing = await readState(statePath);
   if (existing && (await isGatewayHealthy(existing.port))) {
-    if (sameFingerprint(existing.fingerprint, wantedFp)) {
-      // HTTP 指纹已证明是 Boujoy；state.pid 可能过期，尽量用 /api/health.pid 刷新
+    if (sameFingerprint(existing.fingerprint, wantedFp) && !cfg.forceRestart) {
+      const engines = await ensureHarnessEngines(cfg, existing?.engines, warnings);
       const health = await httpGetJson(`http://127.0.0.1:${existing.port}/api/health`);
       const livePid =
         health && Number.isFinite(health.pid) && health.pid > 0
           ? health.pid
           : canReuseExistingProcess(existing)
             ? existing.pid
-            : existing.pid ?? null;
-      if (livePid != null && livePid !== existing.pid) {
-        try {
-          await writeFile(
-            statePath,
-            `${JSON.stringify({ ...existing, pid: livePid }, null, 2)}\n`,
-            "utf8",
-          );
-        } catch {
-          // ignore
-        }
+            : (existing.pid ?? null);
+      try {
+        await writeFile(
+          statePath,
+          `${JSON.stringify(
+            {
+              ...existing,
+              pid: livePid,
+              engines: { knowledge: engines.knowledge, clean: engines.clean },
+              childPids: engines.childPids,
+              warnings,
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+      } catch {
+        // ignore
       }
       console.log(
         JSON.stringify({
@@ -465,16 +726,14 @@ async function main() {
           origin: `http://127.0.0.1:${existing.port}`,
           vault: cfg.vault,
           dshRoot: cfg.dshRoot || "",
-          warnings: existing.warnings || [],
+          warnings,
         }),
       );
       return;
     }
-    // HTTP 已是真 Boujoy，但 fingerprint 对不上 → 停旧再起
     stopExisting(existing);
     await new Promise((resolve) => setTimeout(resolve, 500));
   } else if (existing && !(await isGatewayHealthy(existing.port))) {
-    // stale state：端口被其它服务占用或进程已死 → 只杀我们记过的 pid，不杀外站
     stopExisting(existing);
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
@@ -490,7 +749,6 @@ async function main() {
     return;
   }
 
-  // 同口已有真 Boujoy（无 state / fingerprint 已变且旧进程未死透）→ 勿再 bind
   if (await isGatewayHealthy(cfg.port)) {
     const health = await httpGetJson(`http://127.0.0.1:${cfg.port}/api/health`);
     const livePid = health && Number.isFinite(health.pid) ? health.pid : null;
@@ -508,36 +766,8 @@ async function main() {
     }
   }
 
-  const childPids = [];
-  if (cfg.dshRoot && cfg.knowledgeHome) {
-    const knowledgePid = await ensureDsh({
-      dshRoot: cfg.dshRoot,
-      home: cfg.knowledgeHome,
-      port: 3080,
-      clean: false,
-      vault: cfg.vault,
-      warnings,
-    });
-    if (knowledgePid) {
-      childPids.push(knowledgePid);
-    }
-  }
-  if (cfg.dshRoot && cfg.cleanHome) {
-    const cleanPid = await ensureDsh({
-      dshRoot: cfg.dshRoot,
-      home: cfg.cleanHome,
-      port: 3081,
-      clean: true,
-      vault: cfg.vault,
-      warnings,
-    });
-    if (cleanPid) {
-      childPids.push(cleanPid);
-    }
-  }
-
-  const gatewayArgs = buildGatewayArgs(cfg);
-
+  const engines = await ensureHarnessEngines(cfg, null, warnings);
+  const gatewayArgs = buildGatewayArgs(cfg, engines);
   const { child, getStderr } = spawnDetached(cfg.python, gatewayArgs, {
     cwd: path.join(appRoot, "web"),
     env: {
@@ -551,7 +781,7 @@ async function main() {
   const ready = await waitForHealth(cfg.port, 45_000);
   if (!ready) {
     stopPid(child.pid);
-    for (const pid of childPids) {
+    for (const pid of engines.childPids) {
       stopPid(pid);
     }
     console.log(
@@ -568,7 +798,8 @@ async function main() {
     ok: true,
     port: cfg.port,
     pid: child.pid,
-    childPids,
+    childPids: engines.childPids,
+    engines: { knowledge: engines.knowledge, clean: engines.clean },
     vault: cfg.vault,
     dshRoot: cfg.dshRoot || "",
     fingerprint: wantedFp,
