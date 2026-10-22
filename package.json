@@ -10,11 +10,16 @@
     "dev": "node ./scripts/dev-watch.mjs"
   },
   "peerDependencies": {
-    "@getagnx/app-sdk": "*",
+    "@agnx-lab/app-sdk": "*",
     "lucide-react-native": "*",
     "react": "*",
     "react-native": "*",
     "react-native-unistyles": "*",
     "react-native-svg": "*"
+  },
+  "peerDependenciesMeta": {
+    "@agnx-lab/app-sdk": {
+      "optional": true
+    }
   }
 }
