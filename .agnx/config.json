@@ -1,0 +1,10 @@
+{
+  "appId": "boujoy-harness",
+  "installState": "installed",
+  "launchMode": "packaged",
+  "source": {
+    "kind": "github",
+    "url": "https://github.com/asen-goat-mine/boujoy-harness"
+  },
+  "updatedAt": "2026-09-24T20:43:55.338Z"
+}
